@@ -48,7 +48,7 @@ class NotFoundResponse (BaseModel):
 async def validation_exception_handler(request, exception):
     raise HTTPException(
         status_code=400,
-        detail = "The receipt is invalid"
+        detail = {"description" : "The receipt is invalid."}
     )
 
 
