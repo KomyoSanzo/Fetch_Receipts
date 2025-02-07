@@ -1,40 +1,109 @@
-from fastapi import FastAPI, HTTPException
+from decimal import Decimal
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from datetime import datetime, time, date
 from typing import List, Dict
 import uuid, math
+import re
 
-app = FastAPI()
+app = FastAPI(
+    title="Receipt Processor",
+    description="A simple receipt processor",
+    version="1.0.0"
+)
 
-receipts: Dict[str, float] = {}
+receipts: Dict[str, int] = {}
 
+#####
+#SCHEMAS
+#####
 class Item(BaseModel):
     shortDescription: str
-    price: float
+    price: str
 
 class Receipt(BaseModel):
     retailer: str
-    purchaseDate: date
-    purchaseTime: time
-    total: float
+    purchaseDate: str
+    purchaseTime: str
+    total: str
     items: List[Item]
 
 class GetPointsResponse(BaseModel):
-    points : float
+    points : int
 
 class ProcessReceiptsResponse(BaseModel):
-    receipt_id : uuid.UUID
-    points : float
+    id : str
+
+class BadRequestResponse (BaseModel):
+    description : str = "The receipt is invalid."
+
+class NotFoundResponse (BaseModel):
+    description : str = "No receipt found for that ID."
+
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exception):
+    raise HTTPException(
+        status_code=400,
+        detail = "The receipt is invalid"
+    )
+
+
+#####
+#VALIDATORS
+#####
+def validate_price(price: str):
+    if not re.fullmatch("^\\d+\\.\\d{2}$", price):
+        raise HTTPException(status_code=400)
+
+
+def validate_alphanum(s: str):
+    if not re.fullmatch("^[\\w\\s\\-&]+$", s):
+        raise HTTPException(status_code=400)
+
+def validate_receipt(receipt: Receipt):
+    try:
+        datetime.strptime(receipt.purchaseDate, "%Y-%m-%d").date()
+        datetime.strptime(receipt.purchaseTime, "%H:%M").time()
+
+        retailer = receipt.retailer
+        validate_alphanum(retailer)
+        
+        total = receipt.total
+        validate_price(total)
+        
+        items = receipt.items
+        running_total = Decimal(0.0)
+        for item in items:
+            item_desc = item.shortDescription
+            item_price = item.price
+            validate_alphanum(item_desc)
+            validate_price(item_price)
+
+            running_total += Decimal(item_price)
+        
+        if running_total != Decimal(total):
+            raise HTTPException(status_code=400)
+    except:
+        raise HTTPException(status_code=400)
+
+#####
+# BUSINESS LOGIC
+#####
 
 def calculate_points (receipt: Receipt):
+    validate_receipt(receipt)
+    
     retailer = receipt.retailer
-    purchase_date = receipt.purchaseDate
-    purchase_time = receipt.purchaseTime
-    total = receipt.total
+    purchase_date = datetime.strptime(receipt.purchaseDate, "%Y-%m-%d").date()
+    purchase_time = datetime.strptime(receipt.purchaseTime, "%H:%M").time()
+    total = float(receipt.total)
     items = receipt.items
-
     points = 0
-
+    
     # Calculate rule 1: alphanumeric in name
     for c in retailer:
         if c.isalnum():
@@ -49,12 +118,11 @@ def calculate_points (receipt: Receipt):
     # Rule 4
     points += 5 * (len(items) // 2)
 
-
     # Rule 5
     for item in items:
         desc = item.shortDescription.strip()
         if len(desc) % 3 == 0:
-            points += math.ceil(item.price * 0.2)
+            points += math.ceil(float(item.price) * 0.2)
 
     # Rule 6 is funny
     # Rule 7
@@ -67,19 +135,28 @@ def calculate_points (receipt: Receipt):
     
     return points
 
-@app.get("/receipts/{receipt_id}/points", response_model=GetPointsResponse)
-def get_points(receipt_id: str):
-    converted_id = uuid.UUID(receipt_id)
-    if converted_id not in receipts:
-        raise HTTPException(status_code=404, detail=f"Receipt with id {receipt_id} does not exist.")
-    points: int = receipts[converted_id]
-    return {"points" : points}
 
-@app.post("/receipts/process", response_model=ProcessReceiptsResponse)
+#####
+# END POINTS
+#####
+@app.get("/receipts/{receipt_id}/points", response_model=GetPointsResponse, responses = {404: {"model" : NotFoundResponse}})
+def get_points(receipt_id: str):
+    try:
+        converted_id = uuid.UUID(receipt_id)
+        points: int = receipts[converted_id]
+    except:
+        raise HTTPException(status_code=404, detail={"description" : "No receipt found for that ID."})
+    
+    return GetPointsResponse(points = points)
+
+@app.post("/receipts/process", response_model=ProcessReceiptsResponse, responses = {400: {"model" : BadRequestResponse}})
 def process_receipts(receipt: Receipt):
     new_uuid = uuid.uuid4()
-    points = calculate_points(receipt)
+    try:
+        points = calculate_points(receipt)
+    except:
+        raise HTTPException(status_code = 400, detail={"description" : "The receipt is invalid."})
+    
     receipts[new_uuid] = points
-    return {"receipt_id" : new_uuid, "points" : points}
-
+    return ProcessReceiptsResponse(id = str(new_uuid))
 
