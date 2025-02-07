@@ -1,3 +1,4 @@
+import json
 from fastapi.testclient import TestClient
 from main import app
 
@@ -5,6 +6,11 @@ client = TestClient(app)
 
 NOT_FOUND = "No receipt found for that ID."
 BAD_INPUT = "The receipt is invalid."
+
+
+def load_json_file(filename):
+    with open("tests/" + filename, "r") as f:
+        return json.load(f)
 
 def test_process_receipt():
     response = client.post("/receipts/process", json={
@@ -44,7 +50,45 @@ def test_get_receipt():
     assert response.status_code == 200
     assert response.json()["points"] == 27
 
+def test_point_calc_1():
+    json = load_json_file("test_receipt_1.json")
+    response = client.post("/receipts/process", json=json)
+    
+    assert response.status_code == 200 
+    assert "id" in response.json()
+    receipt_id = response.json()["id"]
+    
+    response = client.get(f"/receipts/{receipt_id}/points")
+    
+    assert response.status_code == 200
+    assert response.json()["points"] == 28
 
+def test_point_calc_2():
+    json = load_json_file("test_receipt_2.json")
+    response = client.post("/receipts/process", json=json)
+    
+    assert response.status_code == 200 
+    assert "id" in response.json()
+    receipt_id = response.json()["id"]
+    
+    response = client.get(f"/receipts/{receipt_id}/points")
+    
+    assert response.status_code == 200
+    assert response.json()["points"] == 109
+    
+def test_point_calc_morning_receipt():
+    json = load_json_file("morning-receipt.json")
+    response = client.post("/receipts/process", json=json)
+    
+    assert response.status_code == 200 
+    assert "id" in response.json()
+    receipt_id = response.json()["id"]
+    
+    response = client.get(f"/receipts/{receipt_id}/points")
+    
+    assert response.status_code == 200
+    assert response.json()["points"] == 15
+    
 def test_invalid_id():
     response = client.get(f"/receipts/1111/points")
     assert response.status_code == 404
